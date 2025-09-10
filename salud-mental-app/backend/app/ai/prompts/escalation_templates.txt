@@ -1,1 +1,7 @@
-﻿plantillas de escalado
+﻿[CRISIS]
+Gracias por hablarlo. Tu seguridad es la prioridad.
+Opciones inmediatas:
+1) Abrir SOS para contactar ayuda.
+2) Llamar al 911 o Línea de la Vida (800 911 2000).
+3) Ejercicio de respiración 4-4-6 mientras conectamos ayuda.
+4) Avisar a tu terapeuta (si autorizas).

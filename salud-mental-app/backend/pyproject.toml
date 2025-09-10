@@ -1,20 +1,28 @@
 ﻿[tool.poetry]
-name = 'salud-mental-api'
-version = '0.1.0'
-description = 'FastAPI backend'
-authors = ['Zoe <zoe@example.com>']
+name = "salud-mental-api"
+version = "0.1.0"
+description = "FastAPI backend"
+authors = ["Zoe <zoe@example.com>"]
 
 [tool.poetry.dependencies]
-python = '^3.11'
-fastapi = '^0.112.0'
-uvicorn = '^0.30.0'
-pydantic = '^2.8.0'
-motor = '^3.5.1'
-python-jose = '^3.3.0'
-passlib = '^1.7.4'
-langchain = '^0.2.0'
-httpx = '^0.27.0'
-redis = '^5.0.0'
+python = "^3.11"
+fastapi = "^0.112.0"
+uvicorn = "^0.30.0"
+pydantic = "^2.8.0"
+motor = "^3.5.1"
+python-jose = "^3.3.0"
+passlib = "^1.7.4"
+langchain = "^0.2.0"
+httpx = "^0.27.0"
+redis = "^5.0.0"
 
 [tool.poetry.group.dev.dependencies]
-pytest = '^8.0.0'
+pytest = "^8.0.0"
+pytest-asyncio = "^0.23.8"  # <- añade esto para los tests async
+anyio = "^4.4.0"            # <- útil con httpx
+
+# 👇 esta sección permite que pytest lea config desde TOML
+[tool.pytest.ini_options]
+addopts = "-vv"
+asyncio_mode = "auto"
+testpaths = ["app/tests"]
