@@ -1,7 +1,7 @@
 # app/routes/ai.py
-# Router FastAPI (no Flask) para IA: Ollama (chat) + OpenAI (nahuatl, TTS)
+# Router FastAPI para IA: Ollama (chat) + OpenAI (náhuatl, TTS)
 import os, re, time, base64, requests, logging
-from typing import List, Dict, Any, Tuple
+from typing import Tuple, Any
 from fastapi import APIRouter, Query, HTTPException
 from unidecode import unidecode
 from openai import OpenAI
@@ -9,8 +9,9 @@ from openai import OpenAI
 # pip install -U langchain-ollama
 from langchain_ollama import OllamaLLM
 
-# usa la misma conexión que flows.py
+# Conexión Mongo compartida
 from ..db.mongo import get_db
+from bson.objectid import ObjectId  # <- ✅ usar bson para validar/convertir el sid
 
 router = APIRouter()
 log = logging.getLogger("uvicorn.info")
@@ -23,8 +24,8 @@ OPENAI_KEY    = os.getenv("OPENAI_API_KEY", "")
 TEMPERATURE_DEFAULT = float(os.getenv("LLM_TEMPERATURE", "0.5"))
 TOP_P_DEFAULT       = float(os.getenv("LLM_TOP_P", "0.5"))
 
-# memoria por sesión
-MEMORY_MAX_TURNS = 10  # pares user/bot a conservar
+# Memoria por sesión
+MEMORY_MAX_TURNS = 10  # pares user/assistant a conservar
 
 # ------------------- Guardrails -------------------
 banned_terms = [
@@ -71,7 +72,7 @@ def make_llm(model_name: str, temperature: float, top_p: float):
 
 def safe_generate(llm, prompt: str, max_retries=3) -> Tuple[str, float, int, bool]:
     """
-    Reintenta si el modelo usa términos prohibidos o rechaza.
+    Reintenta si el modelo usa términos prohibidos o frases de rechazo.
     Devuelve: (texto, tiempo, intentos, flagged)
     """
     out, dur = "", 0.0
@@ -84,51 +85,67 @@ def safe_generate(llm, prompt: str, max_retries=3) -> Tuple[str, float, int, boo
         if not contains_banned(out) and not contains_refusal(out):
             return out.strip(), dur, attempt, False
 
-        # refuerzo de reglas si falló
+        # Refuerzo de reglas si falló
         prompt += (
             "\n\nREGLA ESTRICTA:\n"
             "- No uses frases de rechazo como 'no puedo...' ni negativas similares.\n"
             "- Evita por completo términos de autolesión/suicidio.\n"
-            "- Si el tema es sensible, contiene con empatía y ofrece un micro-paso seguro.\n"
-            "- Mantén el español, cálido y respetuoso, y termina con una pregunta abierta breve.\n"
+            "- Si el tema es sensible, contiene con empatía, ofrece un micro-paso seguro y termina con una pregunta breve.\n"
+            "- Mantén el español, cálido y respetuoso.\n"
         )
     return out.strip(), dur, max_retries, True
 
 # ------------------- Memoria en Mongo -------------------
 def _ensure_sid(sid: str) -> Any:
-    db = get_db()
+    """
+    Valida el sid, lo convierte a ObjectId y verifica que exista una sesión.
+    Soporta 'sessions' y (opcional) 'flow_sessions'.
+    """
+    sid = (sid or "").strip()
+    if not sid:
+        raise HTTPException(400, "sid faltante")
+
     try:
-        oid = db.to_object_id(sid)
+        oid = ObjectId(sid)
     except Exception:
         raise HTTPException(400, "sid inválido")
-    s = db.sessions.find_one({"_id": oid})
-    if not s:
+
+    db = get_db()
+    session_doc = (
+        db.get_collection("sessions").find_one({"_id": oid})
+        or db.get_collection("flow_sessions").find_one({"_id": oid})
+    )
+    if not session_doc:
         raise HTTPException(404, "Sesión no encontrada")
+
     return oid
 
 def _append_memory(sid_oid, role: str, text: str):
     db = get_db()
-    db.ai_messages.insert_one({
+    db.get_collection("ai_messages").insert_one({
         "session_id": sid_oid,
         "role": role,            # "user" / "assistant"
         "text": text,
         "ts": time.time(),
     })
-    # recortar memoria a los últimos MEMORY_MAX_TURNS*2 mensajes
-    msgs = list(db.ai_messages.find({"session_id": sid_oid}).sort("ts", 1))
+    # Recortar memoria a los últimos MEMORY_MAX_TURNS*2 mensajes
+    msgs = list(db.get_collection("ai_messages")
+                  .find({"session_id": sid_oid})
+                  .sort("ts", 1))
     excess = max(0, len(msgs) - (MEMORY_MAX_TURNS * 2))
     if excess > 0:
         ids_to_delete = [m["_id"] for m in msgs[:excess]]
-        db.ai_messages.delete_many({"_id": {"$in": ids_to_delete}})
+        db.get_collection("ai_messages").delete_many({"_id": {"$in": ids_to_delete}})
 
 def _get_memory_text(sid_oid, max_turns: int = MEMORY_MAX_TURNS) -> str:
     """
-    Devuelve un bloque de contexto plano de los últimos turnos user/assistant.
+    Devuelve un bloque de contexto plano con los últimos turnos user/assistant.
     """
+    if not sid_oid:
+        return ""
     db = get_db()
-    cur = db.ai_messages.find({"session_id": sid_oid}).sort("ts", 1)
+    cur = db.get_collection("ai_messages").find({"session_id": sid_oid}).sort("ts", 1)
     msgs = [{"role": m["role"], "text": m["text"]} for m in cur]
-    # nos quedamos con los últimos max_turns*2 mensajes
     msgs = msgs[-max_turns*2:]
     lines = []
     for m in msgs:
@@ -141,6 +158,7 @@ TEMPLATE_SALUDO = """
 Eres un asistente de acompañamiento emocional. Genera un ÚNICO saludo en español (30–70 palabras).
 Tono: cercano, cálido y claro. NO uses Markdown. Incluye que eres CoralIA.
 No repitas frases de relleno.
+
 Memoria (resumen de últimos turnos):
 {memoria}
 
@@ -292,7 +310,7 @@ def respuestas(
         sid_oid = _ensure_sid(sid)
         _append_memory(sid_oid, "user", interaccion)
 
-    # Detección de crisis en la ENTRADA: contenemos, pero seguimos registrando
+    # Detección de crisis en la ENTRADA
     if is_crisis_input(interaccion):
         crisis_text = crisis_reply(name)
         if sid_oid:
@@ -303,7 +321,7 @@ def respuestas(
         }
 
     memoria = _get_memory_text(sid_oid, MEMORY_MAX_TURNS) if sid_oid else ""
-    context = f"Nombre: {name}. Mensaje: {interaccion}\n"
+    context = f"Nombre: {name}. Mensaje: {interaccion}"
 
     prompt = TEMPLATE_RESPUESTAS.format(
         lista_prohibidas=", ".join(banned_terms),
@@ -360,7 +378,10 @@ def mindfullness(
         texto, t, n, flagged = safe_generate(llm, prompt)
         if sid_oid:
             _append_memory(sid_oid, "assistant", texto)
-        return {"persona": name, "modelo": model_name, "respuesta": texto, "tiempo": t, "intentos": n, "flagged": flagged}
+        return {
+            "persona": name, "modelo": model_name,
+            "respuesta": texto, "tiempo": t, "intentos": n, "flagged": flagged
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama error: {e}")
 
@@ -394,17 +415,25 @@ def eea(
         texto, t, n, flagged = safe_generate(llm, prompt)
         if sid_oid:
             _append_memory(sid_oid, "assistant", texto)
-        return {"persona": name, "modelo": model_name, "respuesta": texto, "tiempo": t, "intentos": n, "flagged": flagged}
+        return {
+            "persona": name, "modelo": model_name, "respuesta": texto,
+            "tiempo": t, "intentos": n, "flagged": flagged
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama error: {e}")
 
 @router.get("/dass21")
 def dass21(
     name: str = Query("Invitado"),
+    sid: str | None = Query(None),
     model: str | None = Query(None),
     temp: float | None = Query(None),
     topp: float | None = Query(None),
 ):
+    # Aceptamos sid para evitar 400 aunque no se use
+    if sid:
+        _ensure_sid(sid)
+
     context = f"Genera las preguntas del DASS-21 para {name}; separadas por salto de línea; no incluyas CoralIA."
     prompt = TEMPLATE_DASS21.format(
         lista_prohibidas=", ".join(banned_terms),
@@ -418,7 +447,10 @@ def dass21(
     try:
         llm = make_llm(model_name, temperature, topp)
         texto, t, n, flagged = safe_generate(llm, prompt)
-        return {"persona": name, "modelo": model_name, "respuesta": texto, "tiempo": t, "intentos": n, "flagged": flagged}
+        return {
+            "persona": name, "modelo": model_name,
+            "respuesta": texto, "tiempo": t, "intentos": n, "flagged": flagged
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama error: {e}")
 
