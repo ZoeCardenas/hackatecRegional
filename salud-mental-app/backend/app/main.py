@@ -3,6 +3,11 @@
 App FastAPI: CORS, lifespan (startup/shutdown), routers + middleware de trazas.
 """
 import logging, time
+
+# ⬇️ AÑADE ESTO MUY ARRIBA, ANTES DE IMPORTAR CUALQUIER ROUTER
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv(), override=True)  # carga backend/.env
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

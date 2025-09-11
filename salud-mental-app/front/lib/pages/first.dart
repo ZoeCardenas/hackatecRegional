@@ -1,10 +1,16 @@
 // front/lib/pages/first.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb; // ← para detectar web
 import 'package:http/http.dart' as http;
 import 'package:speech_to_text/speech_to_text.dart' as stt; // 🎤 Voz a texto
 import 'package:flutter_tts/flutter_tts.dart'; // 🔊 Texto a voz
+import 'package:audioplayers/audioplayers.dart'; // 🔊 Reproducir bytes TTS OpenAI
 import '../components/navbar.dart';
+// 👇 Avatar animado
+import '../components/AvatarAnimado.dart';
+
+enum AppLanguage { esMX, nah } // Náhuatl (experimental)
 
 class First extends StatefulWidget {
   const First({Key? key}) : super(key: key);
@@ -13,6 +19,90 @@ class First extends StatefulWidget {
 }
 
 class _FirstState extends State<First> {
+  // ----------------- i18n -----------------
+  AppLanguage _lang = AppLanguage.esMX;
+
+  final Map<String, Map<String, String>> _i18n = {
+    'es-MX': {
+      'app_title': 'CORALIA',
+      'voice_on': 'Voz activada',
+      'voice_enable': 'Activar voz',
+      'type_hint': 'Escribe tu mensaje',
+      'sos': 'SOS',
+      'calling_911': 'LLAMARÉ AL\n911',
+      'accept': 'ACEPTAR',
+      'cancel': 'CANCELAR',
+      'mindfulness': 'Mindfulness',
+      'bot_safety':
+          '🤖 IA: Hola, soy Coralia. Si estás en peligro inmediato, toca SOS para llamar a emergencias.',
+      'dass_intro':
+          '🩺 Empecemos con DASS-21. Responde según la última semana (0=Nada, 1=Un poco, 2=Bastante, 3=Mucho).',
+      'dass': 'DASS-21',
+      'dass_opt0': '0 Nada',
+      'dass_opt1': '1 Un poco',
+      'dass_opt2': '2 Bastante',
+      'dass_opt3': '3 Mucho',
+      'bot_empty': '🤖 IA: (sin contenido)',
+      'net_error': '⚠️ Error de red: ',
+      'dass_start_error': '⚠️ No pude iniciar DASS-21: ',
+      'dass_save_error': '⚠️ Error guardando respuesta DASS-21: ',
+      'mind_error': '⚠️ Error mindfulness: ',
+      'nego_error': '⚠️ Error en negociación: ',
+      'saludo_error': '⚠️ Error saludo: ',
+      'results_prefix': '🩺 Resultados DASS-21 → ',
+      'depresion': 'Depresión',
+      'ansiedad': 'Ansiedad',
+      'estres': 'Estrés',
+      'commit_yes': 'Sí, acepto',
+      'commit_msg_user': 'Sí, acepto el plan de 30 minutos seguros.',
+    },
+    'nah': {
+      // ⚠️ Placeholders (ajusta con validación nativa)
+      'app_title': 'CORALIA',
+      'voice_on': 'Tlahtol okichiuh',
+      'voice_enable': 'Kichiwa tlahtol',
+      'type_hint': 'Xijkuilo motlahtōl',
+      'sos': 'SOS',
+      'calling_911': 'Nijkonetzas 911',
+      'accept': 'Kema',
+      'cancel': 'Amo',
+      'mindfulness': 'Kualli yolmelahualiztli',
+      'bot_safety':
+          '🤖 IA: Nehuatl ni Coralia. Tla ok itech moneki niman, xitlākan SOS para tlapotōni 911.',
+      'dass_intro':
+          '🩺 DASS-21. Xiknanquili ika semana tlen panok (0=Ahmo, 1=Mani kīxtzin, 2=Miek, 3=Yolik miek).',
+      'dass': 'DASS-21',
+      'dass_opt0': '0 Ahmo',
+      'dass_opt1': '1 Kīxtzin',
+      'dass_opt2': '2 Miek',
+      'dass_opt3': '3 Yolik miek',
+      'bot_empty': '🤖 IA: (ahmo nimitzitta tlajtoli)',
+      'net_error': '⚠️ Tlatlākatilis tlen red: ',
+      'dass_start_error': '⚠️ Ahmo ok pehua DASS-21: ',
+      'dass_save_error': '⚠️ Tlatlākatilis tlen DASS-21: ',
+      'mind_error': '⚠️ Tlatlākatilis tlen yolmelahualiztli: ',
+      'nego_error': '⚠️ Tlatlākatilis tlen tlātlapōhualli: ',
+      'saludo_error': '⚠️ Tlatlākatilis tlen salutōlo: ',
+      'results_prefix': '🩺 DASS-21 → ',
+      'depresion': 'Kualli xokotiliztli',
+      'ansiedad': 'Tetzauhtli',
+      'estres': 'Kokoliztli',
+      'commit_yes': 'Kema, nimitzki',
+      'commit_msg_user': 'Kema, nimitzki plan de 30 minutos seguros.',
+    }
+  };
+
+  String tr(String key) {
+    final l = _localeCode();
+    return _i18n[l]?[key] ?? _i18n['es-MX']![key] ?? key;
+  }
+
+  String _localeCode() => _lang == AppLanguage.esMX ? 'es-MX' : 'nah';
+  String _sttLocaleId() =>
+      _lang == AppLanguage.esMX ? 'es-MX' : 'es-MX'; // STT: fallback estable
+  String _ttsLocaleId() =>
+      _lang == AppLanguage.esMX ? 'es-MX' : 'es-MX'; // TTS local para fallback
+
   // ----------------- Controllers / State -----------------
   final TextEditingController _messageController = TextEditingController();
   final TextEditingController _eeaController = TextEditingController();
@@ -33,32 +123,70 @@ class _FirstState extends State<First> {
   String? _dassQuestion;
   bool _inDass = false;
 
-  // Negociación (se envía como mensajes, sin tarjeta)
+  // Negociación
   bool _inNegotiation = false;
-  String? _negotiationCommitQ; // pregunta de compromiso
-  bool _commitAccepted = false; // <- NUEVO: ya aceptó los 30 min
+  String? _negotiationCommitQ;
+  bool _commitAccepted = false;
 
   // 🎤 STT
   late final stt.SpeechToText _speech = stt.SpeechToText();
   bool _isListening = false;
 
-  // 🔊 TTS
+  // 🔊 TTS local
   final FlutterTts _tts = FlutterTts();
   bool _ttsReady = false;
   bool _voiceEnabled = false;
+
+  // 🔊 Reproductor para OpenAI TTS (náhuatl)
+  final AudioPlayer _player = AudioPlayer();
+
+  // 🐢 Estado del avatar
+  bool _isTalking = false;
 
   // ----------------- Init -----------------
   @override
   void initState() {
     super.initState();
     _initTTS();
-
-    // Mensaje fijo
-    messages.add(
-        "🤖 IA: Hola, soy Coralia. Si estás en peligro inmediato, toca SOS para llamar a emergencias.");
-
-    // Primero creamos sesión para tener sid, luego saludamos con contexto
+    _setupTtsHandlers();
+    _setupAudioPlayerListener(); // para NAH (audioplayers)
+    messages.add(tr('bot_safety'));
     _startFirstContact().then((_) => _bienvenida());
+  }
+
+  // ----------------- Listeners de audio -----------------
+  void _setupTtsHandlers() {
+    // FlutterTts notifica eventos: mueve el avatar acorde
+    _tts.setStartHandler(() {
+      if (_voiceEnabled && mounted) {
+        setState(() => _isTalking = true);
+      }
+    });
+    _tts.setCompletionHandler(() {
+      if (mounted) setState(() => _isTalking = false);
+    });
+    _tts.setCancelHandler(() {
+      if (mounted) setState(() => _isTalking = false);
+    });
+    _tts.setPauseHandler(() {
+      if (mounted) setState(() => _isTalking = false);
+    });
+    _tts.setContinueHandler(() {
+      if (_voiceEnabled && mounted) setState(() => _isTalking = true);
+    });
+    _tts.setErrorHandler((msg) {
+      if (mounted) setState(() => _isTalking = false);
+    });
+  }
+
+  void _setupAudioPlayerListener() {
+    // Si reproducimos NAH con audioplayers, actualiza el avatar por estado del player
+    _player.onPlayerStateChanged.listen((state) {
+      final playing = state == PlayerState.playing;
+      if (mounted) {
+        setState(() => _isTalking = _voiceEnabled && playing);
+      }
+    });
   }
 
   // ----------------- HTTP helpers -----------------
@@ -75,8 +203,11 @@ class _FirstState extends State<First> {
   Future<Map<String, dynamic>> _post(
       String base, String path, Map<String, dynamic> body) async {
     final uri = Uri.parse("$base/$path");
-    final r = await http.post(uri,
-        headers: {'Content-Type': 'application/json'}, body: jsonEncode(body));
+    final r = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
     if (r.statusCode != 200) {
       throw Exception('POST $path → HTTP ${r.statusCode}: ${r.body}');
     }
@@ -87,7 +218,7 @@ class _FirstState extends State<First> {
   Future<void> _initTTS() async {
     try {
       await _tts.awaitSpeakCompletion(true);
-      await _tts.setLanguage('es-MX');
+      await _tts.setLanguage(_ttsLocaleId());
       await _tts.setSpeechRate(0.45);
       await _tts.setVolume(1.0);
       await _tts.setPitch(1.0);
@@ -97,13 +228,65 @@ class _FirstState extends State<First> {
     }
   }
 
-  Future<void> _speak(String text) async {
-    if (!_ttsReady || !_voiceEnabled) return;
-    if (text.isEmpty) return;
+  // Normaliza diacríticos para TTS
+  String _normalizeNah(String t) {
+    return t
+        .replaceAll(RegExp(r'[ĀÂāâ]'), 'a')
+        .replaceAll(RegExp(r'[ĒÊēê]'), 'e')
+        .replaceAll(RegExp(r'[ĪÎīî]'), 'i')
+        .replaceAll(RegExp(r'[ŌÔōô]'), 'o')
+        .replaceAll(RegExp(r'[ŪÛūû]'), 'u')
+        .replaceAll(RegExp(r'[ȲŶȳŷ]'), 'y');
+  }
+
+  // 🔊 TTS híbrido: OpenAI para NAH (web: data URL, móvil/escritorio: bytes) y FlutterTts para ES-MX (fallback)
+  Future<void> _speakHybrid(String text) async {
+    if (!_voiceEnabled) return;
+    final txt = text.trim();
+    if (txt.isEmpty) return;
+
+    if (_lang == AppLanguage.nah) {
+      try {
+        final clean = _normalizeNah(txt);
+        final uri = Uri.parse('http://127.0.0.1:8000/ai/genera_voz')
+            .replace(queryParameters: {'prompt': clean, 'lang': 'shimmer'});
+        final r = await http.get(uri);
+        if (r.statusCode != 200) {
+          throw Exception('TTS OpenAI HTTP ${r.statusCode}');
+        }
+        final data = jsonDecode(r.body) as Map<String, dynamic>;
+        final b64 = (data['audio_b64'] ?? '') as String;
+        if (b64.isEmpty) return;
+
+        await _player.stop();
+        if (kIsWeb) {
+          // Web: reproducir como data URL (sin escribir archivo)
+          setState(() => _isTalking = true); // arranca animación
+          await _player.play(UrlSource('data:audio/mp3;base64,$b64'));
+        } else {
+          // Mobile/desktop: reproducir desde bytes en memoria
+          final bytes = base64Decode(b64);
+          setState(() => _isTalking = true); // arranca animación
+          await _player.play(BytesSource(bytes));
+        }
+        return;
+      } catch (e) {
+        debugPrint('⚠️ TTS NAH fallback a FlutterTts: $e');
+        // continúa con TTS local como respaldo
+      }
+    }
+
+    // Español (o fallback si falló NAH): FlutterTts local
     try {
+      if (!_ttsReady) await _initTTS();
       await _tts.stop();
-      await _tts.speak(text);
-    } catch (_) {}
+      setState(() => _isTalking = true); // arranca animación
+      await _tts.speak(txt); // con awaitSpeakCompletion(true) espera a terminar
+    } catch (e) {
+      debugPrint('⚠️ FlutterTts error: $e');
+    } finally {
+      if (mounted) setState(() => _isTalking = false); // reposo
+    }
   }
 
   String _sanitize(String text) {
@@ -117,7 +300,7 @@ class _FirstState extends State<First> {
     messages.add("🤖 IA: ");
     final int idx = messages.length - 1;
     _scrollToBottom();
-    _speak(text);
+    _speakHybrid(text);
     const int chunk = 3;
     const int ms = 18;
     int i = 0;
@@ -150,11 +333,12 @@ class _FirstState extends State<First> {
       final data = await _get(_apiBaseAi, 'saludos', {
         'name': 'Zoe',
         if (_sessionId != null) 'sid': _sessionId!,
+        'lang': _localeCode(),
       });
       final saludo = _sanitize(data['respuesta']?.toString() ?? '');
       if (saludo.isNotEmpty) _typeAndSpeak(saludo);
     } catch (e) {
-      messages.add("⚠️ Error saludo: $e");
+      messages.add("${tr('saludo_error')}$e");
       setState(() {});
     }
   }
@@ -175,22 +359,21 @@ class _FirstState extends State<First> {
         'name': 'Zoe',
         'interaccion': message,
         if (_sessionId != null) 'sid': _sessionId!,
+        'lang': _localeCode(),
       });
       final iaRaw = (data['respuesta'] ?? '').toString();
       final ia = _sanitize(iaRaw);
 
-      // si back marca crisis=true, muestra SOS
-      final isCrisis = data['crisis'] == true;
-      if (isCrisis) _showSOSDialog();
+      if (data['crisis'] == true) _showSOSDialog();
 
       if (ia.isNotEmpty) {
         _typeAndSpeak(ia);
       } else {
-        messages.add("🤖 IA: (sin contenido)");
+        messages.add(tr('bot_empty'));
         setState(() {});
       }
     } catch (e) {
-      messages.add("⚠️ Error de red: $e");
+      messages.add("${tr('net_error')}$e");
       setState(() {});
     } finally {
       setState(() => _isLoading = false);
@@ -204,20 +387,18 @@ class _FirstState extends State<First> {
       final data = await _post(
         _apiBaseFlows,
         'first-contact/start',
-        {"user_id": null, "channel": "web"},
+        {"user_id": null, "channel": "web", "lang": _localeCode()},
       );
       _sessionId = data['session_id']?.toString();
       _dassIndex = (data['question_index'] ?? 0) as int;
       _dassQuestion = data['question_text']?.toString();
       _inDass = true;
 
-      // Introducción al DASS como mensaje del bot
-      messages.add(
-          "🩺 Empecemos con DASS-21. Responde según la última semana (0=Nada, 1=Un poco, 2=Bastante, 3=Mucho).");
+      messages.add(tr('dass_intro'));
       setState(() {});
       _scrollToBottom();
     } catch (e) {
-      messages.add("⚠️ No pude iniciar DASS-21: $e");
+      messages.add("${tr('dass_start_error')}$e");
       setState(() {});
     }
   }
@@ -229,31 +410,30 @@ class _FirstState extends State<First> {
         "session_id": _sessionId,
         "index": _dassIndex,
         "value": value,
+        "lang": _localeCode(),
       });
 
       if (data['done'] == true) {
         final scores = data['scores'];
         final resumen =
-            "🩺 Resultados DASS-21 → Depresión: ${scores['depresion']['severity']} (${scores['depresion']['score']}), "
-            "Ansiedad: ${scores['ansiedad']['severity']} (${scores['ansiedad']['score']}), "
-            "Estrés: ${scores['estres']['severity']} (${scores['estres']['score']}).";
+            "${tr('results_prefix')}${tr('depresion')}: ${scores['depresion']['severity']} (${scores['depresion']['score']}), "
+            "${tr('ansiedad')}: ${scores['ansiedad']['severity']} (${scores['ansiedad']['score']}), "
+            "${tr('estres')}: ${scores['estres']['severity']} (${scores['estres']['score']}).";
         messages.add("🤖 IA: $resumen");
         setState(() {});
-        _speak(resumen);
+        _speakHybrid(resumen);
 
-        // Cierra bloque DASS e inicia negociación como continuación del chat
         _inDass = false;
         _inNegotiation = true;
         _negotiationIntro();
       } else {
-        // Siguiente pregunta
         _dassIndex = data['next_index'] as int;
         _dassQuestion = data['next_text']?.toString();
         setState(() {});
         _scrollToBottom();
       }
     } catch (e) {
-      messages.add("⚠️ Error guardando respuesta DASS-21: $e");
+      messages.add("${tr('dass_save_error')}$e");
       setState(() {});
     }
   }
@@ -269,6 +449,7 @@ class _FirstState extends State<First> {
       final data = await _post(_apiBaseFlows, 'negotiation/message', {
         "session_id": _sessionId,
         "user_message": userMsg,
+        "lang": _localeCode(),
       });
 
       final bot = (data['message'] ?? '').toString();
@@ -278,34 +459,28 @@ class _FirstState extends State<First> {
       if (bot.isNotEmpty) {
         messages.add("🤖 IA: $bot");
         setState(() {});
-        _speak(bot);
+        _speakHybrid(bot);
       }
 
-      // Solo mostramos el compromiso si NO se ha aceptado previamente
       if (!_commitAccepted && ask && q != null) {
         _negotiationCommitQ = q;
         messages.add("🤖 IA: $q");
         setState(() {});
       }
     } catch (e) {
-      messages.add("⚠️ Error en negociación: $e");
+      messages.add("${tr('nego_error')}$e");
       setState(() {});
     }
   }
 
   Future<void> _acceptCommitment() async {
-    // Oculta el banner de compromiso y marca como aceptado permanentemente
     _commitAccepted = true;
     _negotiationCommitQ = null;
     setState(() {});
-
-    // Registramos la aceptación como mensaje del usuario para mantener el hilo
-    messages.add("🧑: Sí, acepto el plan de 30 minutos seguros.");
+    messages.add("🧑: ${tr('commit_msg_user')}");
     setState(() {});
     _scrollToBottom();
-
-    // Enviamos al backend, pero si vuelve a preguntar, ya no lo mostraremos
-    await _negotiationSend("Acepto el plan de 30 minutos seguros.");
+    await _negotiationSend(tr('commit_msg_user'));
   }
 
   // ----------------- Mindfulness rápido -----------------
@@ -316,11 +491,12 @@ class _FirstState extends State<First> {
         'name': 'Zoe',
         'interaccion': 'Necesito relajarme',
         if (_sessionId != null) 'sid': _sessionId!,
+        'lang': _localeCode(),
       });
       final txt = _sanitize(data['respuesta']?.toString() ?? '');
       if (txt.isNotEmpty) _typeAndSpeak(txt);
     } catch (e) {
-      messages.add("⚠️ Error mindfulness: $e");
+      messages.add("${tr('mind_error')}$e");
       setState(() {});
     } finally {
       setState(() => _isLoading = false);
@@ -338,7 +514,7 @@ class _FirstState extends State<First> {
       if (available) {
         setState(() => _isListening = true);
         await _speech.listen(
-          localeId: 'es-MX',
+          localeId: _sttLocaleId(),
           onResult: (val) =>
               setState(() => _messageController.text = val.recognizedWords),
         );
@@ -356,11 +532,11 @@ class _FirstState extends State<First> {
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         backgroundColor: Colors.white,
-        title: const Center(
+        title: Center(
           child: Text(
-            'LLAMARÉ AL\n911',
+            tr('calling_911'),
             textAlign: TextAlign.center,
-            style: TextStyle(
+            style: const TextStyle(
                 fontSize: 26, fontWeight: FontWeight.bold, color: Colors.red),
           ),
         ),
@@ -371,33 +547,45 @@ class _FirstState extends State<First> {
             onPressed: () {
               Navigator.pop(context);
               debugPrint('📞 Llamando al 911');
-              // TODO: url_launcher -> launchUrl(Uri.parse('tel:911'));
             },
-            child: const Text('ACEPTAR', style: TextStyle(color: Colors.white)),
+            child:
+                Text(tr('accept'), style: const TextStyle(color: Colors.white)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.lightBlue),
             onPressed: () => Navigator.pop(context),
             child:
-                const Text('CANCELAR', style: TextStyle(color: Colors.white)),
+                Text(tr('cancel'), style: const TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
   }
 
-  // ----------------- UI -----------------
+  // ----------------- Ciclo de vida -----------------
   @override
   void dispose() {
     _messageController.dispose();
     _eeaController.dispose();
     _scroll.dispose();
     _tts.stop();
+    _player.dispose();
     super.dispose();
   }
 
+  Future<void> _changeLanguage(AppLanguage newLang) async {
+    setState(() => _lang = newLang);
+    await _initTTS();
+    if (_voiceEnabled) {
+      await _speakHybrid(tr('voice_on'));
+    }
+  }
+
+  // ----------------- UI -----------------
   @override
   Widget build(BuildContext context) {
+    final title = tr('app_title');
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       drawer: const CustomNavBar(),
@@ -414,13 +602,54 @@ class _FirstState extends State<First> {
             ),
             Row(
               children: [
+                PopupMenuButton<AppLanguage>(
+                  tooltip: 'Idioma',
+                  onSelected: _changeLanguage,
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: AppLanguage.esMX,
+                      child: Row(
+                        children: [
+                          Icon(Icons.flag),
+                          SizedBox(width: 8),
+                          Text('Español (México)'),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: AppLanguage.nah,
+                      child: Row(
+                        children: [
+                          Icon(Icons.translate),
+                          SizedBox(width: 8),
+                          Text('Nāhuatl (experimental)'),
+                        ],
+                      ),
+                    ),
+                  ],
+                  child: Row(
+                    children: [
+                      const Icon(Icons.language),
+                      const SizedBox(width: 6),
+                      Text(_lang == AppLanguage.esMX ? 'ES-MX' : 'NAH'),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // 🔊 Alternador de voz + control de animación/audio
                 IconButton(
-                  tooltip: _voiceEnabled ? 'Voz activada' : 'Activar voz',
+                  tooltip: _voiceEnabled ? tr('voice_on') : tr('voice_enable'),
                   onPressed: !_ttsReady
                       ? null
                       : () async {
-                          setState(() => _voiceEnabled = true);
-                          await _speak('Voz activada');
+                          setState(() => _voiceEnabled = !_voiceEnabled);
+                          if (!_voiceEnabled) {
+                            await _tts.stop();
+                            await _player.stop();
+                            if (mounted) setState(() => _isTalking = false);
+                          } else {
+                            await _speakHybrid(tr('voice_on'));
+                          }
                         },
                   icon: Icon(
                     _voiceEnabled ? Icons.volume_up : Icons.volume_off,
@@ -465,12 +694,25 @@ class _FirstState extends State<First> {
             Expanded(
               child: Column(
                 children: [
-                  const Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Text('CORALIA',
-                        style: TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  // Título
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
+
+                  // 🐢 Avatar centrado entre el título y el chat
+                  const SizedBox(height: 6),
+                  AvatarAnimado(
+                    talking: _isTalking,
+                    size: 160, // puedes ajustar a 120-200
+                    speed: const Duration(milliseconds: 180),
+                    idleFrameIndex: 1,
+                  ),
+                  const SizedBox(height: 6),
 
                   // ------ Chat scroller con DASS inline al final ------
                   Expanded(
@@ -479,7 +721,6 @@ class _FirstState extends State<First> {
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                       itemCount: messages.length + (_inDass ? 1 : 0),
                       itemBuilder: (context, index) {
-                        // Último item: UI de DASS-21
                         if (_inDass && index == messages.length) {
                           return _buildDassInlineCard();
                         }
@@ -500,8 +741,10 @@ class _FirstState extends State<First> {
                                     : Colors.lightBlue[100],
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: Text(messages[index],
-                                  textAlign: TextAlign.left),
+                              child: Text(
+                                messages[index],
+                                textAlign: TextAlign.left,
+                              ),
                             ),
                           ),
                         );
@@ -519,7 +762,7 @@ class _FirstState extends State<First> {
                           const SizedBox(width: 8),
                           ElevatedButton(
                             onPressed: _acceptCommitment,
-                            child: const Text('Sí, acepto'),
+                            child: Text(tr('commit_yes')),
                           ),
                         ],
                       ),
@@ -543,7 +786,7 @@ class _FirstState extends State<First> {
                             minLines: 1,
                             maxLines: 4,
                             decoration: InputDecoration(
-                              hintText: 'Escribe tu mensaje',
+                              hintText: tr('type_hint'),
                               filled: true,
                               fillColor: Colors.white,
                               border: OutlineInputBorder(
@@ -553,7 +796,7 @@ class _FirstState extends State<First> {
                           ),
                         ),
                         IconButton(
-                          tooltip: 'Mindfulness',
+                          tooltip: tr('mindfulness'),
                           icon: const Icon(Icons.self_improvement),
                           onPressed: _quickMindfulness,
                         ),
@@ -598,7 +841,7 @@ class _FirstState extends State<First> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('DASS-21 (${_dassIndex + 1}/21)',
+              Text('${tr('dass')} (${_dassIndex + 1}/21)',
                   style: const TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               Text(_dassQuestion ?? '...'),
@@ -606,10 +849,10 @@ class _FirstState extends State<First> {
               Wrap(
                 spacing: 8,
                 children: [
-                  _dassBtn(0, '0 Nada'),
-                  _dassBtn(1, '1 Un poco'),
-                  _dassBtn(2, '2 Bastante'),
-                  _dassBtn(3, '3 Mucho'),
+                  _dassBtn(0, tr('dass_opt0')),
+                  _dassBtn(1, tr('dass_opt1')),
+                  _dassBtn(2, tr('dass_opt2')),
+                  _dassBtn(3, tr('dass_opt3')),
                 ],
               )
             ],

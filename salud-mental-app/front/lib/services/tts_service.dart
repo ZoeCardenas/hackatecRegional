@@ -1,60 +1,48 @@
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:http/http.dart' as http;
+import 'package:audioplayers/audioplayers.dart';
+import 'package:path_provider/path_provider.dart';
 
 class TtsService {
-  static final TtsService _i = TtsService._();
-  factory TtsService() => _i;
-  TtsService._();
-
   final FlutterTts _tts = FlutterTts();
-  bool _ready = false;
+  final AudioPlayer _player = AudioPlayer();
 
   Future<void> init() async {
-    if (_ready) return;
-
-    // Recomendado: completar antes de disparar siguiente speak
     await _tts.awaitSpeakCompletion(true);
-
-    // Idioma base (ajusta a tu preferencia)
-    await _tts.setLanguage("es-MX"); // "es-ES", "es-US", etc.
-    await _tts.setSpeechRate(0.45); // 0.0 - 1.0
-    await _tts.setPitch(1.0); // 0.5 - 2.0
-    await _tts.setVolume(1.0); // 0.0 - 1.0
-
-    // En web, elegir voz disponible en el navegador
-    if (kIsWeb) {
-      final voices = await _tts.getVoices;
-      // Busca una voz española si existe
-      final es = voices?.firstWhere(
-        (v) =>
-            "${v['name']}".toLowerCase().contains('span') ||
-            "${v['locale']}".toLowerCase().startsWith('es'),
-        orElse: () => null,
-      );
-      if (es != null) {
-        await _tts.setVoice({"name": es["name"], "locale": es["locale"]});
-      }
-    }
-
-    // En Android, modo cola para no cortar frases
-    if (!kIsWeb && Platform.isAndroid) {
-      await _tts.setQueueMode(1); // 0=interrupt, 1=enqueue
-    }
-
-    _ready = true;
+    await _tts.setLanguage("es-MX");
+    await _tts.setSpeechRate(0.40);
+    await _tts.setPitch(1.05);
   }
 
-  Future<void> speak(String text) async {
-    if (text.trim().isEmpty) return;
-    await init();
-    // Evita leer etiquetas internas como <think>…</think>
-    final sanitized = text
-        .replaceAll(RegExp(r'<think>.*?</think>', dotAll: true), '')
-        .replaceAll(RegExp(r'<[^>]+>'), '')
-        .trim();
-    await _tts.speak(sanitized);
+  Future<void> speak(String text, {String lang = "es-MX"}) async {
+    if (lang == "nah") {
+      await _speakNahuatl(text);
+    } else {
+      await _tts.speak(text);
+    }
   }
 
-  Future<void> stop() => _tts.stop();
+  Future<void> _speakNahuatl(String text) async {
+    try {
+      final uri = Uri.parse("http://127.0.0.1:8000/ai/genera_voz")
+          .replace(queryParameters: {"prompt": text, "lang": "shimmer"});
+      final r = await http.get(uri);
+
+      if (r.statusCode != 200) throw Exception("Error TTS OpenAI");
+
+      final data = jsonDecode(r.body);
+      final b64 = data["audio_b64"] as String;
+      final bytes = base64Decode(b64);
+
+      final dir = await getTemporaryDirectory();
+      final file = File("${dir.path}/tts_nahuatl.mp3");
+      await file.writeAsBytes(bytes);
+
+      await _player.play(DeviceFileSource(file.path));
+    } catch (e) {
+      print("⚠️ Error en TTS Náhuatl: $e");
+    }
+  }
 }

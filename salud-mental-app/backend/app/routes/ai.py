@@ -11,7 +11,7 @@ from langchain_ollama import OllamaLLM
 
 # Conexión Mongo compartida
 from ..db.mongo import get_db
-from bson.objectid import ObjectId  # <- ✅ usar bson para validar/convertir el sid
+from bson.objectid import ObjectId  # ✅ validar/convertir el sid
 
 router = APIRouter()
 log = logging.getLogger("uvicorn.info")
@@ -155,7 +155,8 @@ def _get_memory_text(sid_oid, max_turns: int = MEMORY_MAX_TURNS) -> str:
 
 # ------------------- Prompts -------------------
 TEMPLATE_SALUDO = """
-Eres un asistente de acompañamiento emocional. Genera un ÚNICO saludo en español (30–70 palabras).
+{lang_prefix}
+Genera un ÚNICO saludo en el idioma indicado (30–70 palabras).
 Tono: cercano, cálido y claro. NO uses Markdown. Incluye que eres CoralIA.
 No repitas frases de relleno.
 
@@ -173,6 +174,7 @@ Contexto: Bienvenida para {name}; enfócate solo en saludar a {name}.
 """
 
 TEMPLATE_RESPUESTAS = """
+{lang_prefix}
 Actúa como acompañante emocional breve y empático. Responde en 1–3 frases, sin Markdown.
 Adáptate exactamente al mensaje. Si hace una pregunta, respóndela primero y añade un micro-paso práctico
 (respiración corta, anclaje, o sugerir hablar con alguien de confianza).
@@ -192,7 +194,8 @@ Contexto y mensaje actual: {contexto}
 """
 
 TEMPLATE_MINDFULLNESS = """
-Genera un ejercicio breve de mindfulness en español con lista numerada (≥ 4 pasos), usando **negritas** en cada paso.
+{lang_prefix}
+Genera un ejercicio breve de mindfulness con lista numerada (≥ 4 pasos).
 20–70 palabras por ejercicio. Sin enlaces.
 
 Memoria resumida:
@@ -206,7 +209,8 @@ Contexto: {contexto}
 """
 
 TEMPLATE_DASS21 = """
-Genera las 21 preguntas del DASS-21 en español, separadas por saltos de línea, sin encabezados ni enlaces.
+{lang_prefix}
+Genera las 21 preguntas del DASS-21 separadas por saltos de línea, sin encabezados ni enlaces.
 No incluyas el nombre de CoralIA.
 
 REGLA DE SEGURIDAD:
@@ -217,8 +221,9 @@ Contexto: {contexto}
 """
 
 TEMPLATE_EEA = """
-Genera SOLO UN paso del ejercicio de escritura emocional autoreflexiva (EEA) en español (20–70 palabras),
-usando **negritas** al inicio.
+{lang_prefix}
+Genera SOLO UN paso del ejercicio de escritura emocional autoreflexiva (EEA) (20–70 palabras),
+usa **negritas** al inicio si el idioma lo permite.
 
 REGLA DE SEGURIDAD:
 No menciones términos de autolesión/suicidio:
@@ -237,6 +242,81 @@ def crisis_reply(name: str) -> str:
         "Hagamos una respiración: inhala 4, sostén 4, exhala 6. Estoy aquí para acompañarte. "
         "¿Qué está pasando justo ahora?"
     )
+
+# ------------------- OpenAI helpers (traducción/voz) -------------------
+def require_openai() -> OpenAI:
+    if not OPENAI_KEY:
+        raise HTTPException(status_code=400, detail="Falta OPENAI_API_KEY en variables de entorno.")
+    return OpenAI(api_key=OPENAI_KEY)
+
+def translate_es_to_nah(text: str) -> str:
+    """
+    Traduce español → náhuatl preservando estructura y longitud relativa.
+    - No resume ni agrega.
+    - Conserva saltos de línea, viñetas/numeración, signos, emojis y **negritas**/*itálicas*.
+    - Reintenta si el resultado es demasiado corto.
+    """
+    try:
+        client = require_openai()
+
+        def _ask(prompt_text: str, harder: bool = False) -> str:
+            system = (
+                "Eres traductor español a náhuatl (variante central). "
+                "TRADUCE palabra por palabra :\n"
+                "- El número de oraciones en cada párrafo.\n"
+                "- Los saltos de línea, viñetas y numeración (1., 2., •, -).\n"
+                "- Los signos, emojis y el formato **negritas** y *itálicas* si existen.\n"
+                "No agregues notas. Si no hay equivalente, deja el término en español entre [ ]."
+            )
+            if harder:
+                system += (
+                    "\nMUY IMPORTANTE: Mantén fidelidad de la traduccion por cada palabra. "
+                    "No reescribas en estilo telegráfico."
+                )
+            user = (
+                "Traduce al náhuatl preservando estructura el bloque siguiente "
+                f"{prompt_text}\n"
+            )
+            chat = client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.7,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            return (chat.choices[0].message.content or "").strip()
+
+        out = _ask(text, harder=False)
+
+        # Si quedó demasiado corto (<60% del texto fuente), reintenta con reglas más duras
+        try:
+            if len(out) < max(1, int(len(text) * 0.6)):
+                out2 = _ask(text, harder=True)
+                if len(out2) > len(out) * 0.9:  # aceptamos si mejora
+                    out = out2
+        except Exception:
+            pass
+
+        return out if out else text
+
+    except Exception as e:
+        log.warning(f"[translate_es_to_nah] fallback by error: {e}")
+        return text
+
+
+def maybe_translate(text: str, lang: str) -> str:
+    lang = (lang or "es-MX").lower()
+    if lang in ("nah", "nhe", "nhi", "nch", "nahuatl"):
+        return translate_es_to_nah(text)
+    return text
+
+def prefix_lang_instruction(lang: str) -> str:
+    lang = (lang or "es-MX").lower()
+    if lang in ("nah", "nhe", "nhi", "nch", "nahuatl"):
+        return ("Responde en náhuatl (variante central) de forma natural y clara. "
+                "Si el mensaje viene en español, respóndelo en náhuatl. ")
+    return "Responde en español mexicano. "
 
 # ------------------- Endpoints de salud/diagnóstico -------------------
 @router.get("/ping")
@@ -266,6 +346,7 @@ def saludos(
     model: str | None = Query(None),
     temp: float | None = Query(None),
     topp: float | None = Query(None),
+    lang: str = Query("es-MX"),
 ):
     sid_oid = None
     memoria = ""
@@ -274,6 +355,7 @@ def saludos(
         memoria = _get_memory_text(sid_oid)
 
     prompt = TEMPLATE_SALUDO.format(
+        lang_prefix=prefix_lang_instruction(lang),
         lista_prohibidas=", ".join(banned_terms),
         memoria=memoria or "(sin mensajes previos)",
         name=name,
@@ -286,12 +368,14 @@ def saludos(
     try:
         llm = make_llm(model_name, temperature, topp)
         texto, t, n, flagged = safe_generate(llm, prompt)
+        texto_out = maybe_translate(texto, lang)  # 🔁 traducir si es náhuatl
+
         if sid_oid:
-            _append_memory(sid_oid, "assistant", texto)
+            _append_memory(sid_oid, "assistant", texto_out)
         return {
             "persona": name, "modelo": model_name,
-            "respuesta": texto, "tiempo": t, "intentos": n,
-            "flagged": flagged
+            "respuesta": texto_out, "tiempo": t, "intentos": n,
+            "flagged": flagged, "lang": lang
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama error: {e}")
@@ -304,6 +388,7 @@ def respuestas(
     model: str | None = Query(None),
     temp: float | None = Query(None),
     topp: float | None = Query(None),
+    lang: str = Query("es-MX"),
 ):
     sid_oid = None
     if sid:
@@ -313,17 +398,19 @@ def respuestas(
     # Detección de crisis en la ENTRADA
     if is_crisis_input(interaccion):
         crisis_text = crisis_reply(name)
+        crisis_text = maybe_translate(crisis_text, lang)
         if sid_oid:
             _append_memory(sid_oid, "assistant", crisis_text)
         return {
             "persona": name, "modelo": model or MODEL_DEFAULT,
-            "respuesta": crisis_text, "crisis": True
+            "respuesta": crisis_text, "crisis": True, "lang": lang
         }
 
     memoria = _get_memory_text(sid_oid, MEMORY_MAX_TURNS) if sid_oid else ""
     context = f"Nombre: {name}. Mensaje: {interaccion}"
 
     prompt = TEMPLATE_RESPUESTAS.format(
+        lang_prefix=prefix_lang_instruction(lang),
         lista_prohibidas=", ".join(banned_terms),
         memoria=memoria or "(sin historial en esta sesión)",
         contexto=context
@@ -336,12 +423,14 @@ def respuestas(
     try:
         llm = make_llm(model_name, temperature, topp)
         texto, t, n, flagged = safe_generate(llm, prompt)
+        texto_out = maybe_translate(texto, lang)  # 🔁 traducir si es náhuatl
+
         if sid_oid:
-            _append_memory(sid_oid, "assistant", texto)
+            _append_memory(sid_oid, "assistant", texto_out)
         return {
             "persona": name, "modelo": model_name,
-            "respuesta": texto, "tiempo": t, "intentos": n,
-            "flagged": flagged, "crisis": False
+            "respuesta": texto_out, "tiempo": t, "intentos": n,
+            "flagged": flagged, "crisis": False, "lang": lang
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama error: {e}")
@@ -354,6 +443,7 @@ def mindfullness(
     model: str | None = Query(None),
     temp: float | None = Query(None),
     topp: float | None = Query(None),
+    lang: str = Query("es-MX"),
 ):
     sid_oid = None
     memoria = ""
@@ -364,6 +454,7 @@ def mindfullness(
 
     context = f"Genera un ejercicio enumerado (≥4 pasos) para {name}; acorde a: {interaccion}."
     prompt = TEMPLATE_MINDFULLNESS.format(
+        lang_prefix=prefix_lang_instruction(lang),
         lista_prohibidas=", ".join(banned_terms),
         memoria=memoria or "(sin historial en esta sesión)",
         contexto=context
@@ -376,11 +467,14 @@ def mindfullness(
     try:
         llm = make_llm(model_name, temperature, topp)
         texto, t, n, flagged = safe_generate(llm, prompt)
+        texto_out = maybe_translate(texto, lang)
+
         if sid_oid:
-            _append_memory(sid_oid, "assistant", texto)
+            _append_memory(sid_oid, "assistant", texto_out)
         return {
             "persona": name, "modelo": model_name,
-            "respuesta": texto, "tiempo": t, "intentos": n, "flagged": flagged
+            "respuesta": texto_out, "tiempo": t, "intentos": n,
+            "flagged": flagged, "lang": lang
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama error: {e}")
@@ -393,6 +487,7 @@ def eea(
     model: str | None = Query(None),
     temp: float | None = Query(None),
     topp: float | None = Query(None),
+    lang: str = Query("es-MX"),
 ):
     sid_oid = None
     memoria = ""
@@ -402,6 +497,7 @@ def eea(
 
     context = f"Genera el texto del paso EEA para {name}; el paso es: {paso}."
     prompt = TEMPLATE_EEA.format(
+        lang_prefix=prefix_lang_instruction(lang),
         lista_prohibidas=", ".join(banned_terms),
         contexto=context
     )
@@ -413,11 +509,13 @@ def eea(
     try:
         llm = make_llm(model_name, temperature, topp)
         texto, t, n, flagged = safe_generate(llm, prompt)
+        texto_out = maybe_translate(texto, lang)
+
         if sid_oid:
-            _append_memory(sid_oid, "assistant", texto)
+            _append_memory(sid_oid, "assistant", texto_out)
         return {
-            "persona": name, "modelo": model_name, "respuesta": texto,
-            "tiempo": t, "intentos": n, "flagged": flagged
+            "persona": name, "modelo": model_name, "respuesta": texto_out,
+            "tiempo": t, "intentos": n, "flagged": flagged, "lang": lang
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama error: {e}")
@@ -429,6 +527,7 @@ def dass21(
     model: str | None = Query(None),
     temp: float | None = Query(None),
     topp: float | None = Query(None),
+    lang: str = Query("es-MX"),
 ):
     # Aceptamos sid para evitar 400 aunque no se use
     if sid:
@@ -436,6 +535,7 @@ def dass21(
 
     context = f"Genera las preguntas del DASS-21 para {name}; separadas por salto de línea; no incluyas CoralIA."
     prompt = TEMPLATE_DASS21.format(
+        lang_prefix=prefix_lang_instruction(lang),
         lista_prohibidas=", ".join(banned_terms),
         contexto=context
     )
@@ -447,29 +547,26 @@ def dass21(
     try:
         llm = make_llm(model_name, temperature, topp)
         texto, t, n, flagged = safe_generate(llm, prompt)
+        texto_out = maybe_translate(texto, lang)
         return {
             "persona": name, "modelo": model_name,
-            "respuesta": texto, "tiempo": t, "intentos": n, "flagged": flagged
+            "respuesta": texto_out, "tiempo": t, "intentos": n,
+            "flagged": flagged, "lang": lang
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama error: {e}")
 
 # ------------------- OpenAI: traducción y TTS -------------------
-def require_openai() -> OpenAI:
-    if not OPENAI_KEY:
-        raise HTTPException(status_code=400, detail="Falta OPENAI_API_KEY en variables de entorno.")
-    return OpenAI(api_key=OPENAI_KEY)
-
 @router.get("/nahuatl")
 def nahuatl(texto: str = Query(..., description="Texto en español a traducir")):
     client = require_openai()
     chat = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Eres un asistente de traducción de español a náhuatl."},
-            {"role": "user", "content": f"Traduce al náhuatl devolviendo solo la traducción: {texto}"}
+            {"role": "system", "content": "Eres un asistente de traducción de español a náhuatl (variante central). Devuelve solo la traducción."},
+            {"role": "user", "content": texto}
         ],
-        temperature=0.7
+        temperature=0.4
     )
     return {"traduccion": chat.choices[0].message.content}
 
