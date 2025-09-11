@@ -1,13 +1,16 @@
 // front/lib/pages/first.dart
+import 'dart:async';
 import 'dart:convert';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html; // usado solo en Web para redirigir tras rechazo
+
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb; // ← para detectar web
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:speech_to_text/speech_to_text.dart' as stt; // 🎤 Voz a texto
-import 'package:flutter_tts/flutter_tts.dart'; // 🔊 Texto a voz
-import 'package:audioplayers/audioplayers.dart'; // 🔊 Reproducir bytes TTS OpenAI
+import 'package:audioplayers/audioplayers.dart'; // 🔊 Reproducir TTS OpenAI
+
 import '../components/navbar.dart';
-// 👇 Avatar animado
 import '../components/AvatarAnimado.dart';
 
 enum AppLanguage { esMX, nah } // Náhuatl (experimental)
@@ -43,12 +46,12 @@ class _FirstState extends State<First> {
       'dass_opt2': '2 Bastante',
       'dass_opt3': '3 Mucho',
       'bot_empty': '🤖 IA: (sin contenido)',
-      'net_error': '⚠️ Error de red: ',
-      'dass_start_error': '⚠️ No pude iniciar DASS-21: ',
-      'dass_save_error': '⚠️ Error guardando respuesta DASS-21: ',
-      'mind_error': '⚠️ Error mindfulness: ',
-      'nego_error': '⚠️ Error en negociación: ',
-      'saludo_error': '⚠️ Error saludo: ',
+      'net_error': '⚠ Error de red: ',
+      'dass_start_error': '⚠ No pude iniciar DASS-21: ',
+      'dass_save_error': '⚠ Error guardando respuesta DASS-21: ',
+      'mind_error': '⚠ Error mindfulness: ',
+      'nego_error': '⚠ Error en negociación: ',
+      'saludo_error': '⚠ Error saludo: ',
       'results_prefix': '🩺 Resultados DASS-21 → ',
       'depresion': 'Depresión',
       'ansiedad': 'Ansiedad',
@@ -57,7 +60,6 @@ class _FirstState extends State<First> {
       'commit_msg_user': 'Sí, acepto el plan de 30 minutos seguros.',
     },
     'nah': {
-      // ⚠️ Placeholders (ajusta con validación nativa)
       'app_title': 'CORALIA',
       'voice_on': 'Tlahtol okichiuh',
       'voice_enable': 'Kichiwa tlahtol',
@@ -77,12 +79,12 @@ class _FirstState extends State<First> {
       'dass_opt2': '2 Miek',
       'dass_opt3': '3 Yolik miek',
       'bot_empty': '🤖 IA: (ahmo nimitzitta tlajtoli)',
-      'net_error': '⚠️ Tlatlākatilis tlen red: ',
-      'dass_start_error': '⚠️ Ahmo ok pehua DASS-21: ',
-      'dass_save_error': '⚠️ Tlatlākatilis tlen DASS-21: ',
-      'mind_error': '⚠️ Tlatlākatilis tlen yolmelahualiztli: ',
-      'nego_error': '⚠️ Tlatlākatilis tlen tlātlapōhualli: ',
-      'saludo_error': '⚠️ Tlatlākatilis tlen salutōlo: ',
+      'net_error': '⚠ Tlatlākatilis tlen red: ',
+      'dass_start_error': '⚠ Ahmo ok pehua DASS-21: ',
+      'dass_save_error': '⚠ Tlatlākatilis tlen DASS-21: ',
+      'mind_error': '⚠ Tlatlākatilis tlen yolmelahualiztli: ',
+      'nego_error': '⚠ Tlatlākatilis tlen tlātlapōhualli: ',
+      'saludo_error': '⚠ Tlatlākatilis tlen salutōlo: ',
       'results_prefix': '🩺 DASS-21 → ',
       'depresion': 'Kualli xokotiliztli',
       'ansiedad': 'Tetzauhtli',
@@ -98,10 +100,7 @@ class _FirstState extends State<First> {
   }
 
   String _localeCode() => _lang == AppLanguage.esMX ? 'es-MX' : 'nah';
-  String _sttLocaleId() =>
-      _lang == AppLanguage.esMX ? 'es-MX' : 'es-MX'; // STT: fallback estable
-  String _ttsLocaleId() =>
-      _lang == AppLanguage.esMX ? 'es-MX' : 'es-MX'; // TTS local para fallback
+  String _sttLocaleId() => 'es-MX'; // STT estable
 
   // ----------------- Controllers / State -----------------
   final TextEditingController _messageController = TextEditingController();
@@ -118,7 +117,7 @@ class _FirstState extends State<First> {
   // Sesión/Flujos
   String? _sessionId;
 
-  // DASS-21 (inline en el chat)
+  // DASS-21
   int _dassIndex = 0;
   String? _dassQuestion;
   bool _inDass = false;
@@ -132,55 +131,34 @@ class _FirstState extends State<First> {
   late final stt.SpeechToText _speech = stt.SpeechToText();
   bool _isListening = false;
 
-  // 🔊 TTS local
-  final FlutterTts _tts = FlutterTts();
-  bool _ttsReady = false;
+  // 🔊 OpenAI TTS (único camino)
+  final AudioPlayer _player = AudioPlayer();
+  final String _voice = "alloy"; // 👈 misma voz para ES y NAH
   bool _voiceEnabled = false;
 
-  // 🔊 Reproductor para OpenAI TTS (náhuatl)
-  final AudioPlayer _player = AudioPlayer();
-
-  // 🐢 Estado del avatar
+  // 🐢 Avatar
   bool _isTalking = false;
+
+  // ---- Consentimiento (overlay) ----
+  bool _consentAccepted = false;
+  bool _consentDenied = false;
+  int _denyCountdown = 5;
+  Timer? _denyTimer;
 
   // ----------------- Init -----------------
   @override
   void initState() {
     super.initState();
-    _initTTS();
-    _setupTtsHandlers();
-    _setupAudioPlayerListener(); // para NAH (audioplayers)
+    _setupAudioPlayerListener();
     messages.add(tr('bot_safety'));
     _startFirstContact().then((_) => _bienvenida());
+    if (kIsWeb) {
+      _consentAccepted = html.window.localStorage['coralia_consent'] == '1';
+    }
   }
 
-  // ----------------- Listeners de audio -----------------
-  void _setupTtsHandlers() {
-    // FlutterTts notifica eventos: mueve el avatar acorde
-    _tts.setStartHandler(() {
-      if (_voiceEnabled && mounted) {
-        setState(() => _isTalking = true);
-      }
-    });
-    _tts.setCompletionHandler(() {
-      if (mounted) setState(() => _isTalking = false);
-    });
-    _tts.setCancelHandler(() {
-      if (mounted) setState(() => _isTalking = false);
-    });
-    _tts.setPauseHandler(() {
-      if (mounted) setState(() => _isTalking = false);
-    });
-    _tts.setContinueHandler(() {
-      if (_voiceEnabled && mounted) setState(() => _isTalking = true);
-    });
-    _tts.setErrorHandler((msg) {
-      if (mounted) setState(() => _isTalking = false);
-    });
-  }
-
+  // ----------------- Audio/Avatar -----------------
   void _setupAudioPlayerListener() {
-    // Si reproducimos NAH con audioplayers, actualiza el avatar por estado del player
     _player.onPlayerStateChanged.listen((state) {
       final playing = state == PlayerState.playing;
       if (mounted) {
@@ -214,81 +192,58 @@ class _FirstState extends State<First> {
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
-  // ----------------- TTS / Typing -----------------
-  Future<void> _initTTS() async {
-    try {
-      await _tts.awaitSpeakCompletion(true);
-      await _tts.setLanguage(_ttsLocaleId());
-      await _tts.setSpeechRate(0.45);
-      await _tts.setVolume(1.0);
-      await _tts.setPitch(1.0);
-      setState(() => _ttsReady = true);
-    } catch (_) {
-      setState(() => _ttsReady = false);
-    }
-  }
-
-  // Normaliza diacríticos para TTS
-  String _normalizeNah(String t) {
-    return t
-        .replaceAll(RegExp(r'[ĀÂāâ]'), 'a')
-        .replaceAll(RegExp(r'[ĒÊēê]'), 'e')
-        .replaceAll(RegExp(r'[ĪÎīî]'), 'i')
-        .replaceAll(RegExp(r'[ŌÔōô]'), 'o')
-        .replaceAll(RegExp(r'[ŪÛūû]'), 'u')
-        .replaceAll(RegExp(r'[ȲŶȳŷ]'), 'y');
-  }
-
-  // 🔊 TTS híbrido: OpenAI para NAH (web: data URL, móvil/escritorio: bytes) y FlutterTts para ES-MX (fallback)
-  Future<void> _speakHybrid(String text) async {
+  // ----------------- TTS OpenAI (único) -----------------
+  Future<void> _speakOpenAI(String text) async {
     if (!_voiceEnabled) return;
     final txt = text.trim();
     if (txt.isEmpty) return;
 
-    if (_lang == AppLanguage.nah) {
-      try {
-        final clean = _normalizeNah(txt);
-        final uri = Uri.parse('http://127.0.0.1:8000/ai/genera_voz')
-            .replace(queryParameters: {'prompt': clean, 'lang': 'shimmer'});
-        final r = await http.get(uri);
-        if (r.statusCode != 200) {
-          throw Exception('TTS OpenAI HTTP ${r.statusCode}');
+    try {
+      if (kIsWeb) {
+        // WEB: usa base64 + data URL (no BytesSource)
+        final url = Uri.parse('$_apiBaseAi/tts_b64');
+        final resp = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            "text": txt,
+            "voice": _voice,
+            "format": "webm"
+          }), // 👈 webm en Web
+        );
+        if (resp.statusCode != 200) {
+          throw Exception('TTS (web) HTTP ${resp.statusCode}: ${resp.body}');
         }
-        final data = jsonDecode(r.body) as Map<String, dynamic>;
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
         final b64 = (data['audio_b64'] ?? '') as String;
         if (b64.isEmpty) return;
 
         await _player.stop();
-        if (kIsWeb) {
-          // Web: reproducir como data URL (sin escribir archivo)
-          setState(() => _isTalking = true); // arranca animación
-          await _player.play(UrlSource('data:audio/mp3;base64,$b64'));
-        } else {
-          // Mobile/desktop: reproducir desde bytes en memoria
-          final bytes = base64Decode(b64);
-          setState(() => _isTalking = true); // arranca animación
-          await _player.play(BytesSource(bytes));
+        await _player.play(UrlSource('data:audio/webm;base64,$b64'));
+      } else {
+        // MOBILE/DESKTOP: bytes directos (mp3)
+        final url = Uri.parse('$_apiBaseAi/tts_bytes');
+        final resp = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            "text": txt,
+            "voice": _voice,
+            "format": "mp3"
+          }), // 👈 mp3 fuera de Web
+        );
+        if (resp.statusCode != 200) {
+          throw Exception('TTS (bytes) HTTP ${resp.statusCode}: ${resp.body}');
         }
-        return;
-      } catch (e) {
-        debugPrint('⚠️ TTS NAH fallback a FlutterTts: $e');
-        // continúa con TTS local como respaldo
+        await _player.stop();
+        await _player.play(BytesSource(resp.bodyBytes));
       }
-    }
-
-    // Español (o fallback si falló NAH): FlutterTts local
-    try {
-      if (!_ttsReady) await _initTTS();
-      await _tts.stop();
-      setState(() => _isTalking = true); // arranca animación
-      await _tts.speak(txt); // con awaitSpeakCompletion(true) espera a terminar
     } catch (e) {
-      debugPrint('⚠️ FlutterTts error: $e');
-    } finally {
-      if (mounted) setState(() => _isTalking = false); // reposo
+      debugPrint('⚠ TTS error: $e');
     }
   }
 
+  // ----------------- Utilidades texto -----------------
   String _sanitize(String text) {
     final noThink =
         text.replaceAll(RegExp(r'<think>.*?</think>', dotAll: true), '');
@@ -300,7 +255,7 @@ class _FirstState extends State<First> {
     messages.add("🤖 IA: ");
     final int idx = messages.length - 1;
     _scrollToBottom();
-    _speakHybrid(text);
+    _speakOpenAI(text); // 👈 SIEMPRE OpenAI TTS
     const int chunk = 3;
     const int ms = 18;
     int i = 0;
@@ -421,7 +376,7 @@ class _FirstState extends State<First> {
             "${tr('estres')}: ${scores['estres']['severity']} (${scores['estres']['score']}).";
         messages.add("🤖 IA: $resumen");
         setState(() {});
-        _speakHybrid(resumen);
+        _speakOpenAI(resumen);
 
         _inDass = false;
         _inNegotiation = true;
@@ -459,7 +414,7 @@ class _FirstState extends State<First> {
       if (bot.isNotEmpty) {
         messages.add("🤖 IA: $bot");
         setState(() {});
-        _speakHybrid(bot);
+        _speakOpenAI(bot);
       }
 
       if (!_commitAccepted && ask && q != null) {
@@ -509,7 +464,7 @@ class _FirstState extends State<First> {
     if (!_isListening) {
       final available = await _speech.initialize(
         onStatus: (val) => debugPrint('🔊 onStatus: $val'),
-        onError: (val) => debugPrint('⚠️ onError: $val'),
+        onError: (val) => debugPrint('⚠ onError: $val'),
       );
       if (available) {
         setState(() => _isListening = true);
@@ -565,20 +520,188 @@ class _FirstState extends State<First> {
   // ----------------- Ciclo de vida -----------------
   @override
   void dispose() {
+    _denyTimer?.cancel();
     _messageController.dispose();
     _eeaController.dispose();
     _scroll.dispose();
-    _tts.stop();
     _player.dispose();
     super.dispose();
   }
 
   Future<void> _changeLanguage(AppLanguage newLang) async {
     setState(() => _lang = newLang);
-    await _initTTS();
     if (_voiceEnabled) {
-      await _speakHybrid(tr('voice_on'));
+      await _speakOpenAI(tr('voice_on')); // misma voz en ambos idiomas
     }
+  }
+
+  // ===== Consentimiento como OVERLAY =====
+
+  void _startDenyCountdown() {
+    _denyTimer?.cancel();
+    setState(() => _denyCountdown = 5);
+    _denyTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) return;
+      setState(() => _denyCountdown--);
+      if (_denyCountdown <= 0) {
+        t.cancel();
+        if (kIsWeb) {
+          html.window.location.href = '/';
+        } else {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
+      }
+    });
+  }
+
+  Widget _buildConsentPanel() {
+    bool _checked = false;
+    return StatefulBuilder(
+      builder: (context, setSB) {
+        return SizedBox(
+          width: double.infinity,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Consentimiento Informado para el Uso de la Plataforma CoralIA',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              const SizedBox(
+                height: 360,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(height: 8),
+                      Text('1. Introducción',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text(
+                          'Usted está por utilizar la plataforma CoralIA, un sistema de acompañamiento psicológico '
+                          'diseñado para brindar apoyo emocional mediante herramientas digitales, incluyendo chatbots, '
+                          'ejercicios de escritura emocional autorreflexiva y recursos de bienestar mental.\n\n'
+                          'Este consentimiento busca informarle sobre el uso, los alcances y las limitaciones de la plataforma, '
+                          'así como sobre el manejo de sus datos personales.'),
+                      SizedBox(height: 12),
+                      Text('2. Objetivo',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text(
+                          'La plataforma tiene como finalidad ofrecer apoyo psicológico inicial y promover el autocuidado emocional. '
+                          'No sustituye la atención profesional directa ni reemplaza la consulta con un psicólogo o psiquiatra certificado.'),
+                      SizedBox(height: 12),
+                      Text('3. Procedimiento',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text('Durante el uso de la plataforma, podrá:\n'
+                          '• Interactuar con un asistente virtual diseñado para ofrecer respuestas empáticas y recursos de apoyo.\n'
+                          '• Acceder a ejercicios de escritura emocional autoreflexiva y de mindfulness.\n'
+                          '• Responder cuestionarios validados (DASS-21) para explorar su estado emocional.'),
+                      SizedBox(height: 12),
+                      Text('4. Beneficios',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text('El uso de la plataforma puede ayudarle a:\n'
+                          '• Reflexionar sobre su estado emocional.\n'
+                          '• Acceder a herramientas de autocuidado.\n'
+                          '• Identificar patrones de estrés, ansiedad o depresión para buscar ayuda oportuna.'),
+                      SizedBox(height: 12),
+                      Text('5. Riesgos y limitaciones',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text(
+                          '• En caso de emergencia, se recomienda acudir inmediatamente a un servicio de urgencias o llamar a '
+                          'líneas de apoyo psicológico disponibles en su país.\n'
+                          '• CoralIA puede cometer errores en sus textos generados.'),
+                      SizedBox(height: 12),
+                      Text('6. Manejo de datos personales',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text(
+                          '• Sus datos personales serán encriptados y protegidos conforme a la normativa aplicable.\n'
+                          '• Los datos recolectados se usarán para mejorar el servicio e investigación, de forma anonimizada.\n'
+                          '• Usted podrá solicitar la eliminación de sus datos en cualquier momento.'),
+                      SizedBox(height: 12),
+                      Text('7. Voluntariedad',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text(
+                          'El uso de la plataforma es completamente voluntario. Puede dejar de usarla en cualquier momento.'),
+                      SizedBox(height: 12),
+                      Text('8. Consentimiento',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text(
+                          'Declaro haber leído y comprendido la información anterior. He tenido la oportunidad de hacer preguntas '
+                          'y recibí respuestas satisfactorias. Acepto participar de manera libre y voluntaria en el uso de la plataforma CoralIA.'),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: _checked,
+                onChanged: (v) => setSB(() => _checked = v ?? false),
+                title: const Text(
+                    'He leído y acepto el consentimiento informado.'),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _consentDenied = true;
+                        _startDenyCountdown();
+                      });
+                    },
+                    child: const Text('No acepto'),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: _checked
+                        ? () {
+                            setState(() => _consentAccepted = true);
+                            if (kIsWeb) {
+                              html.window.localStorage['coralia_consent'] = '1';
+                            }
+                          }
+                        : null,
+                    child: const Text('Aceptar y continuar'),
+                  ),
+                ],
+              )
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDeniedPanel() {
+    return SizedBox(
+      width: double.infinity,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Disculpa, no te puedo ayudar',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 12),
+          Text(
+              'Necesitas aceptar el consentimiento informado para usar la plataforma.\n'
+              'Saliendo en $_denyCountdown segundos…'),
+        ],
+      ),
+    );
   }
 
   // ----------------- UI -----------------
@@ -636,21 +759,18 @@ class _FirstState extends State<First> {
                   ),
                 ),
                 const SizedBox(width: 12),
-                // 🔊 Alternador de voz + control de animación/audio
+                // 🔊 Alternador de voz (OpenAI TTS)
                 IconButton(
                   tooltip: _voiceEnabled ? tr('voice_on') : tr('voice_enable'),
-                  onPressed: !_ttsReady
-                      ? null
-                      : () async {
-                          setState(() => _voiceEnabled = !_voiceEnabled);
-                          if (!_voiceEnabled) {
-                            await _tts.stop();
-                            await _player.stop();
-                            if (mounted) setState(() => _isTalking = false);
-                          } else {
-                            await _speakHybrid(tr('voice_on'));
-                          }
-                        },
+                  onPressed: () async {
+                    setState(() => _voiceEnabled = !_voiceEnabled);
+                    if (!_voiceEnabled) {
+                      await _player.stop();
+                      if (mounted) setState(() => _isTalking = false);
+                    } else {
+                      await _speakOpenAI(tr('voice_on'));
+                    }
+                  },
                   icon: Icon(
                     _voiceEnabled ? Icons.volume_up : Icons.volume_off,
                     color: _voiceEnabled ? Colors.green[700] : Colors.black54,
@@ -662,163 +782,193 @@ class _FirstState extends State<First> {
         ),
       ),
       body: SafeArea(
-        child: Row(
+        child: Stack(
           children: [
-            // Barra SOS
-            Container(
-              width: 80,
-              color: Colors.red,
-              child: Center(
-                child: RotatedBox(
-                  quarterTurns: 1,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20)),
+            // ===== CONTENIDO NORMAL =====
+            Row(
+              children: [
+                // Barra SOS
+                Container(
+                  width: 80,
+                  color: Colors.red,
+                  child: Center(
+                    child: RotatedBox(
+                      quarterTurns: 1,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        onPressed: _showSOSDialog,
+                        child: const Text(
+                          'SOS',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 26,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                     ),
-                    onPressed: _showSOSDialog,
-                    child: const Text(
-                      'SOS',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 26,
-                          fontWeight: FontWeight.bold),
+                  ),
+                ),
+
+                // Panel principal
+                Expanded(
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 8),
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+
+                      const SizedBox(height: 6),
+                      AvatarAnimado(
+                        talking: _isTalking,
+                        size: 160,
+                        speed: const Duration(milliseconds: 180),
+                        idleFrameIndex: 1,
+                      ),
+                      const SizedBox(height: 6),
+
+                      // ------ Chat + DASS inline ------
+                      Expanded(
+                        child: ListView.builder(
+                          controller: _scroll,
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          itemCount: messages.length + (_inDass ? 1 : 0),
+                          itemBuilder: (context, index) {
+                            if (_inDass && index == messages.length) {
+                              return _buildDassInlineCard();
+                            }
+
+                            final isUser = messages[index].startsWith("🧑");
+                            return Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 6.0),
+                              child: Align(
+                                alignment: isUser
+                                    ? Alignment.centerRight
+                                    : Alignment.centerLeft,
+                                child: Container(
+                                  constraints:
+                                      const BoxConstraints(maxWidth: 720),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: isUser
+                                        ? Colors.green[100]
+                                        : Colors.lightBlue[100],
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    messages[index],
+                                    textAlign: TextAlign.left,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+
+                      if (_negotiationCommitQ != null && !_commitAccepted)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                          child: Row(
+                            children: [
+                              Expanded(child: Text(_negotiationCommitQ!)),
+                              const SizedBox(width: 8),
+                              ElevatedButton(
+                                onPressed: _acceptCommitment,
+                                child: Text(tr('commit_yes')),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                      if (_isLoading)
+                        const Padding(
+                          padding: EdgeInsets.all(8.0),
+                          child: CircularProgressIndicator(),
+                        ),
+
+                      // ------ Input fila ------
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _messageController,
+                                minLines: 1,
+                                maxLines: 4,
+                                decoration: InputDecoration(
+                                  hintText: tr('type_hint'),
+                                  filled: true,
+                                  fillColor: Colors.white,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                ),
+                                onSubmitted: (_) => _sendMessage(),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: tr('mindfulness'),
+                              icon: const Icon(Icons.self_improvement),
+                              onPressed: _quickMindfulness,
+                            ),
+                            IconButton(
+                              icon: Icon(
+                                _isListening ? Icons.mic_none : Icons.mic,
+                                color: _isListening
+                                    ? const Color.fromARGB(255, 255, 255, 255)
+                                    : Colors.black,
+                              ),
+                              onPressed: _startListening,
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.send),
+                              onPressed: _sendMessage,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+
+            // ===== OVERLAY CONSENTIMIENTO =====
+            if (!_consentAccepted)
+              Positioned.fill(
+                child: Container(
+                  color: Colors.black.withOpacity(0.45),
+                  alignment: Alignment.center,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    child: Material(
+                      elevation: 8,
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: _consentDenied
+                            ? _buildDeniedPanel()
+                            : _buildConsentPanel(),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-
-            // Panel principal
-            Expanded(
-              child: Column(
-                children: [
-                  const SizedBox(height: 8),
-                  // Título
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-
-                  // 🐢 Avatar centrado entre el título y el chat
-                  const SizedBox(height: 6),
-                  AvatarAnimado(
-                    talking: _isTalking,
-                    size: 160, // puedes ajustar a 120-200
-                    speed: const Duration(milliseconds: 180),
-                    idleFrameIndex: 1,
-                  ),
-                  const SizedBox(height: 6),
-
-                  // ------ Chat scroller con DASS inline al final ------
-                  Expanded(
-                    child: ListView.builder(
-                      controller: _scroll,
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                      itemCount: messages.length + (_inDass ? 1 : 0),
-                      itemBuilder: (context, index) {
-                        if (_inDass && index == messages.length) {
-                          return _buildDassInlineCard();
-                        }
-
-                        final isUser = messages[index].startsWith("🧑");
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6.0),
-                          child: Align(
-                            alignment: isUser
-                                ? Alignment.centerRight
-                                : Alignment.centerLeft,
-                            child: Container(
-                              constraints: const BoxConstraints(maxWidth: 720),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: isUser
-                                    ? Colors.green[100]
-                                    : Colors.lightBlue[100],
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                messages[index],
-                                textAlign: TextAlign.left,
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-
-                  // Banner de compromiso (solo si no se aceptó)
-                  if (_negotiationCommitQ != null && !_commitAccepted)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Row(
-                        children: [
-                          Expanded(child: Text(_negotiationCommitQ!)),
-                          const SizedBox(width: 8),
-                          ElevatedButton(
-                            onPressed: _acceptCommitment,
-                            child: Text(tr('commit_yes')),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  if (_isLoading)
-                    const Padding(
-                      padding: EdgeInsets.all(8.0),
-                      child: CircularProgressIndicator(),
-                    ),
-
-                  // ------ Input fila ------
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _messageController,
-                            minLines: 1,
-                            maxLines: 4,
-                            decoration: InputDecoration(
-                              hintText: tr('type_hint'),
-                              filled: true,
-                              fillColor: Colors.white,
-                              border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(20)),
-                            ),
-                            onSubmitted: (_) => _sendMessage(),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: tr('mindfulness'),
-                          icon: const Icon(Icons.self_improvement),
-                          onPressed: _quickMindfulness,
-                        ),
-                        IconButton(
-                          icon: Icon(
-                            _isListening ? Icons.mic_none : Icons.mic,
-                            color: _isListening
-                                ? const Color.fromARGB(255, 255, 255, 255)
-                                : Colors.black,
-                          ),
-                          onPressed: _startListening,
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.send),
-                          onPressed: _sendMessage,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ],
         ),
       ),
@@ -841,8 +991,10 @@ class _FirstState extends State<First> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('${tr('dass')} (${_dassIndex + 1}/21)',
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              Text(
+                '${tr('dass')} (${_dassIndex + 1}/21)',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
               const SizedBox(height: 8),
               Text(_dassQuestion ?? '...'),
               const SizedBox(height: 12),

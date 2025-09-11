@@ -19,7 +19,7 @@ class CustomNavBar extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'AuxilIA',
+                  'CORALIA',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 24,
@@ -56,7 +56,7 @@ class CustomNavBar extends StatelessWidget {
           ),
           _NavItem(
             icon: Icons.close,
-            title: 'Cerrar sesión',
+            title: 'Borrar Cuenta',
             onTap: () => Navigator.pushNamed(context, AppRoutes.prueba),
           ),
           _NavItem(
