@@ -7,8 +7,8 @@ class HistorialClinicoPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Map<String, String> datosClinicos = {
-      'Paciente': 'Juan Pérez',
-      'Edad': '30 años',
+      'Paciente': 'Zoe Cardenas',
+      'Edad': '19 años',
       'Enfermedades cronicas': 'Hipertensión',
       'Tipo de sangre': 'O+',
       'Alergias': 'Penicilina',
@@ -21,13 +21,13 @@ class HistorialClinicoPage extends StatelessWidget {
       backgroundColor: const Color(0xFFF5F5F5),
       drawer: const CustomNavBar(),
       appBar: AppBar(
-        backgroundColor: const Color.fromARGB(255, 102, 146, 111),
+        backgroundColor: const Color.fromARGB(255, 187, 196, 189),
         title: Row(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
             Image.asset(
-              'assets/imagenes/logohorizontal.png',
-              height: 50,
+              'assets/imagenes/2.png',
+              height: 150,
               fit: BoxFit.contain,
             ),
             const SizedBox(width: 10),

@@ -1,8 +1,9 @@
 # app/routes/ai.py
 # Router FastAPI para IA: Ollama (chat) + OpenAI (náhuatl, TTS)
-import os, re, time, base64, requests, logging
+import os, re, time, base64, requests, logging, io
 from typing import Tuple, Any
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Body
+from fastapi.responses import StreamingResponse, JSONResponse
 from unidecode import unidecode
 from openai import OpenAI
 
@@ -23,6 +24,9 @@ OPENAI_KEY    = os.getenv("OPENAI_API_KEY", "")
 
 TEMPERATURE_DEFAULT = float(os.getenv("LLM_TEMPERATURE", "0.5"))
 TOP_P_DEFAULT       = float(os.getenv("LLM_TOP_P", "0.5"))
+
+# Voz TTS por defecto (las voces disponibles incluyen: alloy, verse, shimmer, coral, breeze, etc.)
+TTS_VOICE_DEFAULT   = os.getenv("TTS_VOICE", "shimmer")
 
 # Memoria por sesión
 MEMORY_MAX_TURNS = 10  # pares user/assistant a conservar
@@ -252,58 +256,34 @@ def require_openai() -> OpenAI:
 def translate_es_to_nah(text: str) -> str:
     """
     Traduce español → náhuatl preservando estructura y longitud relativa.
-    - No resume ni agrega.
-    - Conserva saltos de línea, viñetas/numeración, signos, emojis y **negritas**/*itálicas*.
-    - Reintenta si el resultado es demasiado corto.
     """
     try:
         client = require_openai()
 
-        def _ask(prompt_text: str, harder: bool = False) -> str:
-            system = (
-                "Eres traductor español a náhuatl (variante central). "
-                "TRADUCE palabra por palabra :\n"
-                "- El número de oraciones en cada párrafo.\n"
-                "- Los saltos de línea, viñetas y numeración (1., 2., •, -).\n"
-                "- Los signos, emojis y el formato **negritas** y *itálicas* si existen.\n"
-                "No agregues notas. Si no hay equivalente, deja el término en español entre [ ]."
-            )
-            if harder:
-                system += (
-                    "\nMUY IMPORTANTE: Mantén fidelidad de la traduccion por cada palabra. "
-                    "No reescribas en estilo telegráfico."
-                )
-            user = (
-                "Traduce al náhuatl preservando estructura el bloque siguiente "
-                f"{prompt_text}\n"
+        def _ask(prompt_text: str) -> str:
+            system = "Eres un asistente de traducción de español a náhuatl (variante central). Devuelve solo la traducción."
+            user_prompt = (
+                "Traduce el texto al náhuatl. Traduce palabra por palabra. "
+                "No repitas o cicles palabras. Solo regresa la traducción, no agregues nada extra. "
+                "Si no existe una palabra, usa la más similar. Refrasea si hace falta para coherencia. "
+                f"Texto: {prompt_text}"
             )
             chat = client.chat.completions.create(
-                model="gpt-4o-mini",
-                temperature=0.7,
+                model="gpt-4.1-mini",
+                temperature=0.2,
                 messages=[
                     {"role": "system", "content": system},
-                    {"role": "user", "content": user},
+                    {"role": "user", "content": user_prompt},
                 ],
             )
             return (chat.choices[0].message.content or "").strip()
 
-        out = _ask(text, harder=False)
-
-        # Si quedó demasiado corto (<60% del texto fuente), reintenta con reglas más duras
-        try:
-            if len(out) < max(1, int(len(text) * 0.6)):
-                out2 = _ask(text, harder=True)
-                if len(out2) > len(out) * 0.9:  # aceptamos si mejora
-                    out = out2
-        except Exception:
-            pass
-
+        out = _ask(text)
         return out if out else text
 
     except Exception as e:
         log.warning(f"[translate_es_to_nah] fallback by error: {e}")
         return text
-
 
 def maybe_translate(text: str, lang: str) -> str:
     lang = (lang or "es-MX").lower()
@@ -368,7 +348,7 @@ def saludos(
     try:
         llm = make_llm(model_name, temperature, topp)
         texto, t, n, flagged = safe_generate(llm, prompt)
-        texto_out = maybe_translate(texto, lang)  # 🔁 traducir si es náhuatl
+        texto_out = maybe_translate(texto, lang)
 
         if sid_oid:
             _append_memory(sid_oid, "assistant", texto_out)
@@ -423,7 +403,7 @@ def respuestas(
     try:
         llm = make_llm(model_name, temperature, topp)
         texto, t, n, flagged = safe_generate(llm, prompt)
-        texto_out = maybe_translate(texto, lang)  # 🔁 traducir si es náhuatl
+        texto_out = maybe_translate(texto, lang)
 
         if sid_oid:
             _append_memory(sid_oid, "assistant", texto_out)
@@ -561,25 +541,132 @@ def dass21(
 def nahuatl(texto: str = Query(..., description="Texto en español a traducir")):
     client = require_openai()
     chat = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4.1-mini",  # o "gpt-4o-mini"
         messages=[
             {"role": "system", "content": "Eres un asistente de traducción de español a náhuatl (variante central). Devuelve solo la traducción."},
-            {"role": "user", "content": texto}
+            {"role": "user", "content": f"Traduce el texto al náhuatl. Traduce palabra por palabra. No repitas ni cicles palabras. Solo regresa la traducción, sin extras. Si no existe una palabra usa la más similar. Refrasea si hace falta para coherencia. Texto: {texto}"},
         ],
-        temperature=0.4
+        temperature=0.2
     )
-    return {"traduccion": chat.choices[0].message.content}
+    return {"traduccion": (chat.choices[0].message.content or "").strip()}
 
+# ---------- Helpers de audio ----------
+def _mime_from_fmt(fmt: str) -> str:
+    fmt = (fmt or "mp3").lower()
+    if fmt == "mp3":  return "audio/mpeg"
+    if fmt == "aac":  return "audio/aac"
+    if fmt == "flac": return "audio/flac"
+    if fmt == "wav":  return "audio/wav"
+    if fmt == "pcm":  return "audio/L16"
+    if fmt == "opus": return "audio/ogg"   # OpenAI entrega Opus en OGG
+    return "application/octet-stream"
+
+_ALLOWED_TTS_FORMATS = {"mp3","aac","opus","flac","pcm","wav"}
+
+def _sanitize_tts_format(fmt: str) -> str:
+    f = (fmt or "mp3").lower().strip()
+    if f == "webm":       # 🚫 no soportado por la API, lo mapeamos
+        return "opus"     # equivalente de alta compresión compatible web
+    if f not in _ALLOWED_TTS_FORMATS:
+        return "mp3"      # fallback seguro
+    return f
+
+# ---------- TTS moderno: bytes (recomendado para Flutter Web) ----------
+@router.post("/tts_bytes")
+def tts_bytes(
+    payload: dict = Body(..., example={"text": "Hola, ¿cómo estás?", "voice": "shimmer", "format": "mp3"})
+):
+    """
+    Devuelve audio binario generado por OpenAI TTS.
+    body: { text: str, voice?: str, format?: "mp3"|"opus"|"aac"|"flac"|"wav"|"pcm" }
+    """
+    text  = (payload.get("text")  or "").strip()
+    voice = (payload.get("voice") or TTS_VOICE_DEFAULT).strip()
+    fmt   = _sanitize_tts_format(payload.get("format"))
+
+    if not text:
+        raise HTTPException(400, "Falta 'text'")
+
+    client = require_openai()
+
+    # A) Streaming en chunks (si tu SDK lo soporta)
+    try:
+        def _gen():
+            with client.audio.speech.with_streaming_response.create(
+                model="gpt-4o-mini-tts",
+                voice=voice,
+                input=text,
+                response_format=fmt
+            ) as resp:
+                for chunk in resp.iter_bytes():
+                    yield chunk
+
+        return StreamingResponse(
+            _gen(),
+            media_type=_mime_from_fmt(fmt),
+            headers={
+                "Content-Disposition": f'inline; filename="speech.{fmt}"',
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "no-store"
+            }
+        )
+    except AttributeError:
+        # B) Fallback sin streaming (lee todo a memoria)
+        speech = client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice=voice,
+            input=text,
+            response_format=fmt
+        )
+        audio_bytes = speech.read() if hasattr(speech, "read") else getattr(speech, "content", b"")
+        buf = io.BytesIO(audio_bytes)
+        return StreamingResponse(
+            buf,
+            media_type=_mime_from_fmt(fmt),
+            headers={
+                "Content-Disposition": f'inline; filename="speech.{fmt}"',
+                "Cache-Control": "no-store"
+            }
+        )
+
+# ---------- TTS: base64 (compat) ----------
+@router.post("/tts_b64")
+def tts_b64(
+    payload: dict = Body(..., example={"text": "Hola, ¿cómo estás?", "voice": "shimmer", "format": "mp3"})
+):
+    text  = (payload.get("text")  or "").strip()
+    voice = (payload.get("voice") or TTS_VOICE_DEFAULT).strip()
+    fmt   = _sanitize_tts_format(payload.get("format"))
+
+    if not text:
+        raise HTTPException(400, "Falta 'text'")
+
+    client = require_openai()
+    speech = client.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice=voice,
+        input=text,
+        response_format=fmt
+    )
+    raw = speech.read() if hasattr(speech, "read") else getattr(speech, "content", b"")
+    audio_b64 = base64.b64encode(raw).decode("utf-8")
+    return JSONResponse({"audio_b64": audio_b64, "format": fmt, "voice": voice})
+
+# ---------- TTS legacy: GET con base64 (mantener si ya lo usas) ----------
 @router.get("/genera_voz")
 def genera_voz(
     prompt: str = Query(..., description="Texto a sintetizar"),
-    lang: str = Query("alloy", description="Voz (alloy, verse, shimmer, etc.)")
+    lang: str = Query(TTS_VOICE_DEFAULT, description="Voz (alloy, verse, shimmer, etc.)"),
+    fmt: str = Query("mp3", description="Formato de salida (mp3/opus/aac/flac/wav/pcm)")
 ):
     client = require_openai()
+    fmt_sane = _sanitize_tts_format(fmt)
     speech = client.audio.speech.create(
-        model="gpt-4o-mini-tts",  # o "tts-1"
+        model="gpt-4o-mini-tts",
         voice=lang,
-        input=prompt
+        input=prompt,
+        response_format=fmt_sane
     )
-    audio_b64 = base64.b64encode(speech.read()).decode("utf-8")
-    return {"audio_b64": audio_b64, "format": "mp3"}
+    raw = speech.read() if hasattr(speech, "read") else getattr(speech, "content", b"")
+    audio_b64 = base64.b64encode(raw).decode("utf-8")
+    return {"audio_b64": audio_b64, "format": fmt_sane, "voice": lang}

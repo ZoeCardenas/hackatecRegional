@@ -102,7 +102,7 @@ class _CercaDeMiPageState extends State<CercaDeMiPage> {
       backgroundColor: const Color(0xFFF5F5F5),
       drawer: const CustomNavBar(),
       appBar: AppBar(
-        backgroundColor: const Color.fromARGB(255, 102, 146, 111),
+        backgroundColor: const Color.fromARGB(255, 187, 196, 189),
         title: const Text('CERCA DE MÍ',
             style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,

@@ -13,7 +13,7 @@ class AuxiliaApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'AuxilIA',
+      title: 'CoralIA',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Color(0xFF72C7D3)),
         useMaterial3: true,

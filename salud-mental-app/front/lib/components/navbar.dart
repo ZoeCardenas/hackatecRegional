@@ -45,6 +45,11 @@ class CustomNavBar extends StatelessWidget {
                 Navigator.pushNamed(context, AppRoutes.login), // Ajusta la ruta
           ),
           _NavItem(
+            icon: Icons.emergency,
+            title: 'Inicio',
+            onTap: () => Navigator.pushNamed(context, AppRoutes.first),
+          ),
+          _NavItem(
             icon: Icons.book,
             title: 'Historial',
             onTap: () => Navigator.pushNamed(context, AppRoutes.historial),
@@ -59,18 +64,14 @@ class CustomNavBar extends StatelessWidget {
             title: 'Borrar Cuenta',
             onTap: () => Navigator.pushNamed(context, AppRoutes.prueba),
           ),
-          _NavItem(
-            icon: Icons.emergency,
-            title: 'Primeros auxilios',
-            onTap: () => Navigator.pushNamed(context, AppRoutes.first),
-          ),
+          
           // Agrega más ítems según necesites
-          const Divider(),
+          /*const Divider(),
           _NavItem(
             icon: Icons.analytics,
             title: 'Análisis',
             onTap: () => Navigator.pushNamed(context, AppRoutes.seguimiento),
-          ),
+          )*/
         ],
       ),
     );

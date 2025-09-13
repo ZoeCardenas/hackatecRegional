@@ -710,7 +710,7 @@ class _FirstState extends State<First> {
     final title = tr('app_title');
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
+      backgroundColor: const Color(0xFFFFFFFF),
       drawer: const CustomNavBar(),
       appBar: AppBar(
         backgroundColor: const Color.fromARGB(255, 187, 196, 189),
@@ -719,7 +719,7 @@ class _FirstState extends State<First> {
           children: [
             Image.asset(
               'assets/imagenes/2.png',
-              height: 40,
+              height: 150,
               fit: BoxFit.contain,
               errorBuilder: (_, __, ___) => const SizedBox.shrink(),
             ),
@@ -790,7 +790,7 @@ class _FirstState extends State<First> {
                 // Barra SOS
                 Container(
                   width: 80,
-                  color: Colors.red,
+                  color: Colors.white,
                   child: Center(
                     child: RotatedBox(
                       quarterTurns: 1,
